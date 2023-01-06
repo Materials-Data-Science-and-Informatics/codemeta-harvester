@@ -3,7 +3,7 @@
 # This tool harvests software metadata from source code repositories and makes it available as codemeta
 #Files parsed: codemeta.json codemeta-harvest.json setup.py pyproject.toml pom.xml package.json README.md README.MD ReadMe.md readme.md README.rst README README.txt README.TXT CONTRIBUTORS AUTHORS MAINTAINERS CITATION.cff CITATION.CFF CITATION LICENSE LICENSE.md COPYING COPYRIGHT
 
-VERSION="0.3.0" #also update in codemeta.json
+VERSION="0.3.1" #also update in codemeta.json
 SCRIPTDIR="$(realpath "$(dirname "$0")")"
 DEBUG=0
 
@@ -191,6 +191,7 @@ harvest() {
         CODEMETAPY_RECONCILE_ARGS="$CODEMETAPY_RECONCILE_ARGS --released"
     fi
     SCANDIRS="$4 ."
+    GROUP="$5"
     info "Git reference: $REF"
     #ensure there is nothing left from previous runs (might happen if one was run with --keep)
     rm -rf "$CACHEDIR/tmp/"*".$ID.codemeta.json"
@@ -565,6 +566,12 @@ harvest() {
             fi
         fi
 
+        if [ -n "$GROUP" ]; then
+            #groups assigned in the harvester configuration always take precendence, even over codemeta.json
+            info "Setting group $GROUP"
+            echo "{ \"applicationSuite\": \"$GROUP\" }" > "$CACHEDIR/tmp/04-applicationSuite.$ID.codemeta.json"
+        fi
+
         if [ -n "$CURRENT_BRANCH" ]; then
             if ! git checkout "$CURRENT_BRANCH" 2> "$TMPLOG"; then
                 #fallback, stash and retry
@@ -633,13 +640,17 @@ get_latest_version() {
     #Finds the latest git tag or falls back to returning the git default branch (usually master or main)
     #Assumes some kind of semantic versioning (possibly with a v prefix), also allows a one-letter suffix
     #does not allow suffixes like -rc1  and -alpha (those are seen as pre-releases rather than full releases)
-    TAG=$(git tag --sort version:refname | grep -E "^v?[0-9]+(\.[0-9])*[A-Za-z]?" | tail -n 1)
+    TAG=$(git tag --sort version:refname | grep -E "^${TAGPREFIX}v?[0-9]+(\.[0-9])*[A-Za-z]?" | tail -n 1)
     if [ -z "$TAG" ]; then
         info "No releases found, falling back to default git branch!"
         git_default_branch
     else
         info "Found release $TAG"
-        echo "$TAG"
+        if [ -n "$TAGPREFIX" ]; then
+            echo "$TAG" | sed -e "s/$TAGPREFIX//"
+        else
+            echo "$TAG"
+        fi
     fi
 }
 
@@ -663,6 +674,10 @@ process() {
     ROOTPATH=$(dasel --null -r yaml ".root" < "$CONFIGFILE")
     SCANDIRS=$(dasel --null -r yaml --plain ".scandirs" < "$CONFIGFILE" | tr -d "[]")
     SERVICE_URLS=$(dasel --null -r yaml --plain ".services" < "$CONFIGFILE" | tr -d "[]")
+    GROUP=$(dasel --null -r yaml --plain ".group" < "$CONFIGFILE" | tr -d "[]")
+    TAGPREFIX=$(dasel --null -r yaml --plain ".tagprefix" < "$CONFIGFILE" | tr -d "[]")
+    [ "$GROUP" = "null" ] && GROUP=
+    [ "$TAGPREFIX" = "null" ] && TAGPREFIX=
     #Get the requested ref (branch or tag or commit) from the config (if present, otherwise the latest tag will be extracted automatically)
     REF=$(dasel --null -r yaml ".ref" < "$CONFIGFILE")
     LOGFILE="$OUTPUTDIR/$ID.harvest.log"
@@ -702,7 +717,7 @@ process() {
                 if [ -n "$ROOTPATH" ] && [ "$ROOTPATH" != "null" ]; then
                     cd "$ROOTPATH" || die "Unable to enter $ROOTPATH"
                 fi
-                harvest "$ID" "$REF" "$CODEMETAPY_RECONCILE_ARGS" "$SCANDIRS"
+                harvest "$ID" "$REF" "$CODEMETAPY_RECONCILE_ARGS" "$SCANDIRS" "$GROUP"
             else
                 error "Failed to git pull $SOURCEREPO"
                 unset -v LOGFILE
@@ -724,7 +739,7 @@ process() {
                 if [ -n "$ROOTPATH" ]  && [ "$ROOTPATH" != "null" ]; then
                     cd "$ROOTPATH" || die "Unable to enter $ROOTPATH"
                 fi
-                harvest "$ID" "$REF" "$CODEMETAPY_RECONCILE_ARGS" "$SCANDIRS"
+                harvest "$ID" "$REF" "$CODEMETAPY_RECONCILE_ARGS" "$SCANDIRS" "$GROUP"
             else
                 error "Failed to git clone $SOURCEREPO"
                 unset -v LOGFILE
